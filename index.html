@@ -65,11 +65,12 @@
 <body>
 <canvas id="c"></canvas>
 
-<div id="ui">
-  <div id="title">
-    <h1>Casa Jardim Central</h1>
-    <p>Lote 10 × 20 m &nbsp;·&nbsp; Fachada Norte &nbsp;·&nbsp; Sol da tarde: Sul/Oeste</p>
+  <div id="ui">
+  <div id="controls">
+    <button id="btn-tour" onclick="startTour()">▶ Tour Virtual</button>
   </div>
+</div>
+</div>
   <div id="controls">
     <div class="btn-group">
       <button id="btn-ext" class="active" onclick="setMode('ext')">⬡ Externo</button>
@@ -94,13 +95,7 @@
 </div>
 
 <div id="room-label"></div>
-<div id="hint">Externo: arrastar=girar · scroll=zoom &nbsp;|&nbsp; Interno: WASD=mover · clique+mouse=olhar</div>
-<div id="legend">
-  <span class="n">▲ Norte — fachada / quartos</span>
-  <span class="s">▼ Sul — piscina / sol da tarde</span>
-  <span>⬤ Jardim de Inverno: centro da casa</span>
-  <span>🌿 Ventilação Norte↔Sul cruzada</span>
-</div>
+<div id="hint">Arrastar=girar · Scroll=zoom · Clique=olhar</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -1278,16 +1273,12 @@ function runTourStep(){
 
 function setMode(m){
   mode=m;
-  document.getElementById('btn-ext').classList.toggle('active',m==='ext');
-  document.getElementById('btn-int').classList.toggle('active',m==='int');
   const hint=document.getElementById('hint');
   if(m==='int'){
     intPos.set(0,1.65,-2.0); intYaw=Math.PI; intPitch=0;
-    hint.textContent='WASD = mover  ·  Clique + mover mouse = olhar  ·  Q/E = subir/descer';
     roomLabel.classList.remove('show');
   } else {
     if(pointerLocked) document.exitPointerLock();
-    hint.textContent='Arrastar = girar  ·  Scroll/Pinch = zoom';
   }
 }
 
