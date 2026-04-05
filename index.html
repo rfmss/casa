@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Casa Jardim Central — Lote 10×20m</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#1a1a18; overflow:hidden; font-family:'Courier New',monospace; }
+  #c { display:block; width:100vw; height:100vh; }
+
+  #ui {
+    position:fixed; top:0; left:0; right:0;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding:16px 20px; pointer-events:none; z-index:10;
+  }
+
+  #title { color:#f5f0e8; pointer-events:none; }
+  #title h1 { font-size:1rem; letter-spacing:0.15em; text-transform:uppercase; }
+  #title p  { font-size:0.65rem; color:#a09880; margin-top:3px; letter-spacing:0.1em; }
+
+  #controls {
+    display:flex; flex-direction:column; gap:8px; pointer-events:all;
+    align-items:flex-end;
+  }
+  .btn-group { display:flex; gap:6px; }
+  button {
+    background:#2a2a24cc; border:1px solid #605a48;
+    color:#f5f0e8; font-family:'Courier New',monospace;
+    font-size:0.65rem; letter-spacing:0.08em; text-transform:uppercase;
+    padding:7px 12px; cursor:pointer; transition:all 0.2s;
+    backdrop-filter:blur(6px);
+  }
+  button:hover { background:#4a4438cc; border-color:#b05a2f; }
+  button.active { background:#b05a2f; border-color:#d07a4f; color:#fff; }
+
+  #hint {
+    position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+    color:#807868; font-size:0.62rem; letter-spacing:0.1em;
+    text-transform:uppercase; text-align:center;
+    pointer-events:none; z-index:10;
+  }
+  #room-label {
+    position:fixed; bottom:44px; left:50%; transform:translateX(-50%);
+    color:#f5f0e8; font-size:0.75rem; letter-spacing:0.12em;
+    text-transform:uppercase; background:#1a1a18cc;
+    padding:6px 16px; backdrop-filter:blur(4px);
+    border:1px solid #4a4438; opacity:0;
+    transition:opacity 0.4s; pointer-events:none; z-index:10;
+  }
+  #room-label.show { opacity:1; }
+
+  #legend {
+    position:fixed; bottom:16px; right:20px;
+    color:#a09878; font-size:0.58rem; letter-spacing:0.08em;
+    text-transform:uppercase; pointer-events:none; z-index:10;
+    line-height:1.6;
+  }
+  #legend span { display:block; }
+  #legend .n { color:#88b8d8; }
+  #legend .s { color:#e09050; }
+  #legend .arrow { color:#f0c040; font-size:0.7rem; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <div id="title">
+    <h1>Casa Jardim Central</h1>
+    <p>Lote 10 × 20 m &nbsp;·&nbsp; Fachada Norte &nbsp;·&nbsp; Sol da tarde: Sul/Oeste</p>
+  </div>
+  <div id="controls">
+    <div class="btn-group">
+      <button id="btn-ext" class="active" onclick="setMode('ext')">⬡ Externo</button>
+      <button id="btn-int" onclick="setMode('int')">⌂ Interno</button>
+    </div>
+    <div class="btn-group">
+      <button onclick="setTime('morning')">☀ Manhã</button>
+      <button onclick="setTime('noon')">☀ Meio-dia</button>
+      <button onclick="setTime('afternoon')">🌅 Tarde</button>
+    </div>
+    <div class="btn-group">
+      <button onclick="toggleRoof()">⬜ Teto/Vidro</button>
+      <button onclick="toggleWalls()">◫ Paredes</button>
+    </div>
+  </div>
+</div>
+
+<div id="room-label"></div>
+<div id="hint">Externo: arrastar=girar · scroll=zoom &nbsp;|&nbsp; Interno: WASD=mover · clique+mouse=olhar</div>
+<div id="legend">
+  <span class="n">▲ Norte — fachada / quartos</span>
+  <span class="s">▼ Sul — piscina / sol da tarde</span>
+  <span>⬤ Jardim de Inverno: centro da casa</span>
+  <span>🌿 Ventilação Norte↔Sul cruzada</span>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ══════════════════════════════════════════
+// ORIENTAÇÃO:
+//   Norte = -Z (frente/fachada, quartos)
+//   Sul   = +Z (fundos, piscina, sol tarde)
+//   Leste = +X (sol manhã)
+//   Oeste = -X (sol tarde)
+//
+// PLANTA QUADRADA ~10×10m útil, lote 10×20m
+//
+//  ┌──────────────────────────────────┐  NORTE (-Z)
+//  │  Suíte     │ J.Inverno │ Qto 2  │
+//  │  (N-Leste) │  CENTRO   │ (N-Oste│
+//  │────────────┤           ├────────│
+//  │  Sala/Sta  │           │ Cozinha│
+//  │  (S-Leste) │           │ (S-Oste│
+//  └────────────┴───────────┴────────┘  SUL (+Z)
+//  Piscina no canto SW (Sul+Oeste) — mais quente tarde
+//  Varanda na fachada Norte
+//
+// Jardim de Inverno: 3.5×3.5m no centro geométrico
+// Tudo acessa o jardim. Vidro lateral = parede, chuva fina entra, ralo central.
+// ══════════════════════════════════════════
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+scene.fog = new THREE.Fog(0x87CEEB, 50, 130);
+
+const camera = new THREE.PerspectiveCamera(58, innerWidth/innerHeight, 0.1, 200);
+
+// ─────────────────────────────────────────
+// TEXTURAS PROCEDURAIS
+// ─────────────────────────────────────────
+function makeCanvas(w,h,fn){
+  const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+  fn(cv.getContext('2d'),w,h);
+  const t=new THREE.CanvasTexture(cv);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  return t;
+}
+
+const grassTex = makeCanvas(256,256,(ctx,w,h)=>{
+  ctx.fillStyle='#5a8a3c'; ctx.fillRect(0,0,w,h);
+  for(let i=0;i<500;i++){
+    ctx.strokeStyle=`hsl(${95+Math.random()*30},${45+Math.random()*25}%,${28+Math.random()*22}%)`;
+    ctx.lineWidth=0.8;
+    ctx.beginPath();
+    const x=Math.random()*w, y=Math.random()*h;
+    ctx.moveTo(x,y); ctx.lineTo(x+(Math.random()-0.5)*3,y-5+Math.random()*3);
+    ctx.stroke();
+  }
+});
+grassTex.repeat.set(12,24);
+
+const tileTex = makeCanvas(256,256,(ctx,w,h)=>{
+  ctx.fillStyle='#ede5d8'; ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle='#cfc5b4'; ctx.lineWidth=2;
+  for(let x=0;x<=w;x+=64){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+  for(let y=0;y<=h;y+=64){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+  // grão sutil
+  for(let i=0;i<200;i++){
+    ctx.fillStyle=`rgba(${100+Math.random()*80},${90+Math.random()*80},${70+Math.random()*60},0.08)`;
+    ctx.fillRect(Math.random()*w,Math.random()*h,Math.random()*4+1,Math.random()*4+1);
+  }
+});
+tileTex.repeat.set(5,5);
+
+const jardimTileTex = makeCanvas(256,256,(ctx,w,h)=>{
+  // pedra natural irregular para o jardim
+  ctx.fillStyle='#8a9a7a'; ctx.fillRect(0,0,w,h);
+  for(let i=0;i<120;i++){
+    const gx=Math.random()*w, gy=Math.random()*h;
+    const gr=8+Math.random()*18;
+    ctx.fillStyle=`hsl(${80+Math.random()*40},${20+Math.random()*20}%,${40+Math.random()*20}%)`;
+    ctx.beginPath();
+    ctx.ellipse(gx,gy,gr,gr*0.7,Math.random()*Math.PI,0,Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle='rgba(0,0,0,0.15)'; ctx.lineWidth=1;
+    ctx.stroke();
+  }
+});
+jardimTileTex.repeat.set(3,3);
+
+const wallTex = makeCanvas(512,512,(ctx,w,h)=>{
+  ctx.fillStyle='#f2ece0'; ctx.fillRect(0,0,w,h);
+  for(let i=0;i<500;i++){
+    ctx.fillStyle=`rgba(${150+Math.random()*50},${140+Math.random()*50},${120+Math.random()*40},0.1)`;
+    ctx.fillRect(Math.random()*w,Math.random()*h,Math.random()*8+1,Math.random()*8+1);
+  }
+});
+wallTex.repeat.set(2,1);
+
+const concreteTex = makeCanvas(256,256,(ctx,w,h)=>{
+  ctx.fillStyle='#d8d0c4'; ctx.fillRect(0,0,w,h);
+  for(let i=0;i<300;i++){
+    ctx.fillStyle=`rgba(${100+Math.random()*60},${90+Math.random()*60},${80+Math.random()*50},0.12)`;
+    ctx.beginPath();
+    ctx.arc(Math.random()*w,Math.random()*h,Math.random()*5+1,0,Math.PI*2);
+    ctx.fill();
+  }
+});
+concreteTex.repeat.set(3,3);
+
+const woodTex = makeCanvas(512,128,(ctx,w,h)=>{
+  for(let i=0;i<16;i++){
+    const hue=22+Math.random()*12, l=38+Math.random()*18;
+    ctx.fillStyle=`hsl(${hue},58%,${l}%)`;
+    ctx.fillRect(0,i*8,w,8);
+    ctx.strokeStyle=`hsl(${hue},48%,${l-14}%)`;
+    ctx.lineWidth=0.6;
+    ctx.beginPath(); ctx.moveTo(0,i*8+8); ctx.lineTo(w,i*8+8); ctx.stroke();
+  }
+  for(let i=0;i<30;i++){
+    ctx.strokeStyle='rgba(0,0,0,0.05)'; ctx.lineWidth=Math.random()*1.5;
+    const x=Math.random()*w;
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x+(Math.random()*10-5),h); ctx.stroke();
+  }
+});
+woodTex.repeat.set(6,2);
+
+const waterTex = makeCanvas(512,512,(ctx,w,h)=>{
+  const grad=ctx.createLinearGradient(0,0,w,h);
+  grad.addColorStop(0,'#3a8fbc'); grad.addColorStop(1,'#5ab8e8');
+  ctx.fillStyle=grad; ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1.5;
+  for(let y=0;y<h;y+=18){
+    ctx.beginPath();
+    for(let x=0;x<w;x+=2){
+      const wave=Math.sin((x*0.04)+(y*0.08))*3;
+      x===0?ctx.moveTo(x,y+wave):ctx.lineTo(x,y+wave);
+    }
+    ctx.stroke();
+  }
+});
+waterTex.repeat.set(3,3);
+
+const roofTex = makeCanvas(256,128,(ctx,w,h)=>{
+  for(let i=0;i<32;i++){
+    ctx.fillStyle=`hsl(200,${15+Math.random()*10}%,${55+Math.random()*15}%)`;
+    ctx.fillRect(0,i*4,w,4);
+  }
+  for(let i=0;i<200;i++){
+    ctx.fillStyle='rgba(0,0,0,0.05)';
+    ctx.fillRect(Math.random()*w,Math.random()*h,Math.random()*6,Math.random()*2);
+  }
+});
+roofTex.repeat.set(6,2);
+
+// ─────────────────────────────────────────
+// MATERIAIS
+// ─────────────────────────────────────────
+const M = {
+  ground:   new THREE.MeshLambertMaterial({map:grassTex}),
+  wall:     new THREE.MeshLambertMaterial({map:wallTex}),
+  wallInt:  new THREE.MeshLambertMaterial({map:wallTex, color:0xf8f2e8}),
+  floor:    new THREE.MeshLambertMaterial({map:tileTex}),
+  jardim:   new THREE.MeshLambertMaterial({map:jardimTileTex}),
+  concrete: new THREE.MeshLambertMaterial({map:concreteTex}),
+  wood:     new THREE.MeshLambertMaterial({map:woodTex}),
+  water:    new THREE.MeshLambertMaterial({map:waterTex, transparent:true, opacity:0.9}),
+  // Vidro jardim: moderno, como parede, cor neutra
+  glass:    new THREE.MeshPhysicalMaterial({color:0xa8d8e8, transparent:true, opacity:0.28, roughness:0.04, metalness:0.15, side:THREE.DoubleSide}),
+  glassRoof:new THREE.MeshPhysicalMaterial({color:0xd0eeff, transparent:true, opacity:0.22, roughness:0.02, metalness:0.1, side:THREE.DoubleSide}),
+  roofMat:  new THREE.MeshLambertMaterial({map:roofTex, color:0xb8c8d0}),
+  roofFlat: new THREE.MeshLambertMaterial({color:0xc8ccc8}),
+  frame:    new THREE.MeshLambertMaterial({color:0x606858}),
+  dark:     new THREE.MeshLambertMaterial({color:0x2a2820}),
+  green:    new THREE.MeshLambertMaterial({color:0x4a9040}),
+  darkgreen:new THREE.MeshLambertMaterial({color:0x2a5a18}),
+  trunk:    new THREE.MeshLambertMaterial({color:0x6a4020}),
+  yellow:   new THREE.MeshLambertMaterial({color:0xe8c860}),
+  white:    new THREE.MeshLambertMaterial({color:0xfdfaf4}),
+  blue:     new THREE.MeshLambertMaterial({color:0x88bbdd}),
+  pool:     new THREE.MeshLambertMaterial({color:0x4080a0}),
+  poolWall: new THREE.MeshLambertMaterial({color:0xb8c8d0}),
+  stone:    new THREE.MeshLambertMaterial({color:0xc0b8a8}),
+  metal:    new THREE.MeshLambertMaterial({color:0x888888}),
+};
+
+// ─────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────
+function box(w,h,d,mat,x,y,z,grp){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+  m.position.set(x,y,z); m.castShadow=true; m.receiveShadow=true;
+  (grp||scene).add(m); return m;
+}
+function cyl(rt,rb,h,seg,mat,x,y,z,grp){
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,seg),mat);
+  m.position.set(x,y,z); m.castShadow=true; (grp||scene).add(m); return m;
+}
+function sph(r,mat,x,y,z,grp){
+  const m=new THREE.Mesh(new THREE.SphereGeometry(r,12,8),mat);
+  m.position.set(x,y,z); m.castShadow=true; (grp||scene).add(m); return m;
+}
+
+// ─────────────────────────────────────────
+// CHÃO / LOTE
+// ─────────────────────────────────────────
+// Lote: 10m (X) × 20m (Z). Casa: 10×10m. Recuo frente 2m, fundos 8m.
+// Casa ocupa X: -5..+5, Z: -3..+7  (Norte=-Z, Sul=+Z)
+// Centro geométrico da casa: X=0, Z=+2
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(80,100), M.ground);
+ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+
+// Calçada (Norte, frente)
+box(12,0.06,3, M.concrete, 0,0.03,-6);
+
+// ─────────────────────────────────────────
+// DIMENSÕES BASE
+// ─────────────────────────────────────────
+const wt  = 0.20;   // espessura parede
+const wh  = 2.80;   // altura parede
+const fh  = 0.10;   // espessura piso
+const hw  = 5.0;    // meia-largura X
+const hd  = 5.0;    // meia-profundidade Z (da casa)
+const cx  = 0;      // centro X
+const cz  = 2.0;    // centro Z da casa (frente em z=-3, fundos z=+7)
+
+// Jardim de Inverno: 3.6×3.6m no centro
+// JZ: cz-1.8 a cz+1.8 = 0.2..3.8
+// JX: -1.8 a +1.8
+const jw  = 3.6;    // largura jardim
+const jd  = 3.6;    // profundidade jardim
+const jx  = 0;      // centro X jardim
+const jz  = cz;     // centro Z jardim = centro casa
+const jhw = jw/2;   // 1.8
+const jhd = jd/2;   // 1.8
+
+// ─────────────────────────────────────────
+// PISOS
+// ─────────────────────────────────────────
+// Piso geral interno (menos área do jardim)
+// 4 quadrantes ao redor do jardim
+// NE (Suíte): x=0..5, z=-3..0.2
+box(4.8, fh, 3.0, M.floor, 2.6, fh/2, -1.5);
+// NO (Qto2): x=-5..0, z=-3..0.2
+box(4.8, fh, 3.0, M.floor, -2.6, fh/2, -1.5);
+// SE (Cozinha+área serv): x=0..5, z=3.8..7
+box(4.8, fh, 3.0, M.floor, 2.6, fh/2, 5.4);
+// SO (Sala+estar): x=-5..0, z=3.8..7
+box(4.8, fh, 3.0, M.floor, -2.6, fh/2, 5.4);
+// Faixas de circulação entre quadrantes
+// Norte-Sul à Leste do jardim: x=1.8..5, z=0.2..3.8
+box(3.4, fh, 3.6, M.floor, 3.3, fh/2, 2.0);
+// Norte-Sul à Oeste do jardim: x=-5..-1.8, z=0.2..3.8
+box(3.4, fh, 3.6, M.floor, -3.3, fh/2, 2.0);
+
+// Piso jardim de inverno (pedra natural)
+box(jw, fh*1.2, jd, M.jardim, jx, fh*0.6, jz);
+
+// Varanda (frente, Norte)
+box(10, fh*0.8, 2.0, M.concrete, 0, fh*0.4, -4.0);
+
+// ─────────────────────────────────────────
+// GRUPOS CONTROLÁVEIS
+// ─────────────────────────────────────────
+const wallsGroup = new THREE.Group(); scene.add(wallsGroup);
+const roofGroup  = new THREE.Group(); scene.add(roofGroup);
+
+function wb(w,h,d,mat,x,y,z){ return box(w,h,d,mat,x,y,z,wallsGroup); }
+function rb(w,h,d,mat,x,y,z){ return box(w,h,d,mat,x,y,z,roofGroup); }
+
+// Função parede com vão de porta
+function wallDoor(axis, len, h, mat, px, py, pz, dc, dw=0.9){
+  const half=len/2;
+  const d1 = (dc-half)+(dw/2);
+  const d2 = (half-dc)-(dw/2);
+  const c1 = -half+d1/2;
+  const c2 = dc+dw/2+d2/2;
+  if(axis==='x'){
+    if(d1>0.05) wb(d1,h,wt,mat, px+c1, py, pz);
+    if(d2>0.05) wb(d2,h,wt,mat, px+c2, py, pz);
+    wb(dw+0.04,0.2,wt,mat, px+dc, py+(h-0.1), pz);
+  } else {
+    if(d1>0.05) wb(wt,h,d1,mat, px, py, pz+c1);
+    if(d2>0.05) wb(wt,h,d2,mat, px, py, pz+c2);
+    wb(wt,0.2,dw+0.04,mat, px, py+(h-0.1), pz+dc);
+  }
+}
+
+// ═══════════════════════════════════════
+// PAREDES EXTERNAS
+// ═══════════════════════════════════════
+// Fachada Norte (z=-3): com porta central e aberturas de ventilação
+wallDoor('x', 10, wh, M.wall, 0, wh/2, -3.0, 0, 1.1);
+// Janela ventilação suíte (NE, z=-3): alto, pega brisa Norte
+wb(0.06,0.8,1.6, M.glass, hw-0.03, 1.8, -1.5);
+// Janela ventilação qto2 (NO, z=-3)
+wb(0.06,0.8,1.6, M.glass, -hw+0.03, 1.8, -1.5);
+
+// Parede Sul (z=+7): cozinha fundos, porta serviço
+wallDoor('x', 10, wh, M.wall, 0, wh/2, 7.0, -2.5, 0.9);
+// Abertura cozinha Sul (ventilação cruzada)
+wb(0.06,0.8,1.6, M.glass, hw-0.03, 1.8, 5.5);
+
+// Parede Leste (x=+5): suíte + cozinha, fechada (sol tarde não bate quartos)
+// z=-3 a +7 (10m)
+wb(wt,wh,10, M.wall, hw-wt/2, wh/2, 2.0);
+// Janela leste cozinha (sol manhã — ok para cozinha)
+wb(1.6,0.06,0.8, M.glass, hw-0.03, 1.8, 5.5);
+
+// Parede Oeste (x=-5): qto2 + sala — recebe sol da tarde, mas quartos protegidos pelo jardim
+wb(wt,wh,10, M.wall, -hw+wt/2, wh/2, 2.0);
+// Janela sala Oeste (ventilação cruzada + estar — ok para sala ver pôr do sol)
+wb(1.6,0.06,0.8, M.glass, -hw+0.03, 1.6, 5.0);
+
+// ═══════════════════════════════════════
+// DIVISÓRIAS INTERNAS
+// ═══════════════════════════════════════
+// Parede Norte do jardim (entre varanda/corredor Norte e jardim)
+// x: -1.8..+1.8, z=-3+jhd = z=0.2 → separação quartos do jardim
+// Abertura central (passagem para jardim — 1.4m de vão)
+wallDoor('x', jw, wh, M.wallInt, jx, wh/2, jz-jhd, 0, 1.4);
+
+// Parede Sul do jardim (entre jardim e sala/cozinha)
+wallDoor('x', jw, wh, M.wallInt, jx, wh/2, jz+jhd, 0, 1.4);
+
+// Parede Leste do jardim (entre jardim e corredor Leste)
+wallDoor('z', jd, wh, M.wallInt, jx+jhw, wh/2, jz, 0, 1.0);
+
+// Parede Oeste do jardim (entre jardim e corredor Oeste)
+wallDoor('z', jd, wh, M.wallInt, jx-jhw, wh/2, jz, 0, 1.0);
+
+// Divisória Suíte | Cozinha Leste (z=3.8, x=1.8..5)
+wallDoor('x', 3.4, wh, M.wallInt, 3.3, wh/2, jz+jhd, 0, 0);  // sem vão (só parede)
+wb(3.4, wh, wt, M.wallInt, 3.3, wh/2, jz+jhd);
+
+// Divisória Qto2 | Sala Oeste (z=3.8, x=-5..-1.8)
+wb(3.4, wh, wt, M.wallInt, -3.3, wh/2, jz+jhd);
+
+// Divisória Suíte | Qto2 ao Norte (z=0.2, x externo): já feito pela parede Norte jardim
+// Estender divisória Norte dos quartos (z=0.2, x=1.8..5 e x=-5..-1.8)
+wb(3.4, wh, wt, M.wallInt, 3.3, wh/2, jz-jhd);   // NE - parede entre varanda e suíte
+wb(3.4, wh, wt, M.wallInt, -3.3, wh/2, jz-jhd);   // NO - parede entre varanda e qto2
+
+// Divisória Suíte | Banheiro (suíte ocupa NE: x=1.8..5, z=-3..0.2)
+// Banheiro no canto NE (x=3.5..5, z=-3..-1.0)
+wb(wt, wh, 2.0, M.wallInt, 3.5, wh/2, -2.0);       // Parede banheiro (Z)
+wb(1.6, wh, wt, M.wallInt, 4.3, wh/2, -1.0);        // Parede banheiro (X) com porta impl.
+
+// Divisória Qto2 | Banheiro (NO: x=-5..-1.8, z=-3..0.2)
+// Banheiro canto NO (x=-5..-3.5, z=-3..-1.0)
+wb(wt, wh, 2.0, M.wallInt, -3.5, wh/2, -2.0);
+wb(1.6, wh, wt, M.wallInt, -4.3, wh/2, -1.0);
+
+// ═══════════════════════════════════════
+// TETO GERAL (laje plana)
+// ═══════════════════════════════════════
+// 4 quadrantes de laje ao redor do jardim (jardim fica aberto em cima = vidro)
+rb(4.8, 0.18, 3.0, M.roofFlat, 2.6, wh+0.09, -1.5);
+rb(4.8, 0.18, 3.0, M.roofFlat, -2.6, wh+0.09, -1.5);
+rb(4.8, 0.18, 3.0, M.roofFlat, 2.6, wh+0.09, 5.4);
+rb(4.8, 0.18, 3.0, M.roofFlat, -2.6, wh+0.09, 5.4);
+// Faixas leste e oeste
+rb(3.4, 0.18, 3.6, M.roofFlat, 3.3, wh+0.09, 2.0);
+rb(3.4, 0.18, 3.6, M.roofFlat, -3.3, wh+0.09, 2.0);
+
+// ═══════════════════════════════════════
+// JARDIM DE INVERNO — COBERTURA DE VIDRO
+// Moderno: vidro é a parede, abertura tipo "shed" inclinado
+// Filete de chuva entra, ralo central
+// ═══════════════════════════════════════
+
+// Estrutura metálica perimetral do jardim (frames)
+// Norte e Sul
+for(let i=0; i<=4; i++){
+  const xp = -jhw + (jw/4)*i;
+  box(0.06,wh+0.8,0.06, M.frame, xp, (wh+0.8)/2, jz-jhd, roofGroup);
+  box(0.06,wh+0.8,0.06, M.frame, xp, (wh+0.8)/2, jz+jhd, roofGroup);
+}
+// Leste e Oeste
+for(let i=0; i<=4; i++){
+  const zp = -jhd + (jd/4)*i;
+  box(0.06,wh+0.8,0.06, M.frame, jx+jhw, (wh+0.8)/2, jz+zp, roofGroup);
+  box(0.06,wh+0.8,0.06, M.frame, jx-jhw, (wh+0.8)/2, jz+zp, roofGroup);
+}
+
+// Painéis de vidro laterais do jardim (do chão até wh)
+// Norte
+box(jw-0.12, wh, 0.04, M.glass, jx, wh/2, jz-jhd, wallsGroup);
+// Sul
+box(jw-0.12, wh, 0.04, M.glass, jx, wh/2, jz+jhd, wallsGroup);
+// Leste
+box(0.04, wh, jd-0.12, M.glass, jx+jhw, wh/2, jz, wallsGroup);
+// Oeste
+box(0.04, wh, jd-0.12, M.glass, jx-jhw, wh/2, jz, wallsGroup);
+
+// Teto de vidro inclinado tipo shed — deixa chuva fina filtrar + ventilação
+// Inclinado: mais alto ao Norte (wh+0.85) e mais baixo ao Sul (wh+0.35)
+// Isso também empurra a brisa Norte para dentro — efeito chaminé
+{
+  const x0=-jhw+0.03, x1=jhw-0.03;
+  const z0=jz-jhd, z1=jz+jhd;
+  const yN = wh+0.85;  // Norte mais alto
+  const yS = wh+0.35;  // Sul mais baixo
+  // Painel de vidro inclinado principal
+  const verts = new Float32Array([
+    x0,yN,z0,  x1,yN,z0,  x1,yS,z1,
+    x0,yN,z0,  x1,yS,z1,  x0,yS,z1,
+    // reverso
+    x0,yN,z0,  x1,yS,z1,  x1,yN,z0,
+    x0,yN,z0,  x0,yS,z1,  x1,yS,z1,
+  ]);
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(verts,3));
+  geo.computeVertexNormals();
+  const m=new THREE.Mesh(geo, M.glassRoof);
+  roofGroup.add(m);
+}
+
+// Vigas horizontais estruturais do teto jardim
+for(let z=jz-jhd; z<=jz+jhd; z+=1.2){
+  box(jw, 0.05, 0.05, M.frame, jx, wh+0.6, z, roofGroup);
+}
+for(let x=-jhw; x<=jhw; x+=1.2){
+  box(0.05, 0.05, jd, M.frame, x, wh+0.6, jz, roofGroup);
+}
+
+// Ralo central (escoamento chuva)
+cyl(0.18,0.18,0.04,12,M.dark, jx, fh*1.25+0.02, jz);
+cyl(0.12,0.12,0.06,12,M.metal, jx, fh*1.25+0.05, jz);
+
+// ═══════════════════════════════════════
+// VARANDA (frente Norte z: -5..-3)
+// ═══════════════════════════════════════
+// Colunas
+[[3.5,-4.5],[0,-4.5],[-3.5,-4.5],[3.5,-3.0],[0,-3.0],[-3.5,-3.0]].forEach(([x,z])=>{
+  cyl(0.12,0.14,wh,8,M.concrete, x, wh/2, z);
+});
+// Viga superior varanda
+box(10, 0.18, 0.18, M.concrete, 0, wh-0.09, -4.5);
+box(10, 0.18, 0.18, M.concrete, 0, wh-0.09, -3.0);
+
+// Guarda-corpo varanda (grade moderna)
+for(let x=-4.5; x<=4.5; x+=0.5){
+  box(0.04, 0.9, 0.04, M.metal, x, 0.45+fh, -4.5);
+}
+box(10, 0.06, 0.06, M.metal, 0, 0.9+fh, -4.5);
+
+// Rede na varanda (deitada = fio de rede entre colunas)
+// Representa rede: duas barras e linhas
+box(0.04, 0.06, 0.9, new THREE.MeshLambertMaterial({color:0xe8c870}), -3.4, 1.1, -4.0);
+box(0.04, 0.06, 0.9, new THREE.MeshLambertMaterial({color:0xe8c870}),  3.4, 1.1, -4.0);
+for(let x=-3.3; x<=3.3; x+=0.22){
+  box(0.02, 0.02, 0.9, new THREE.MeshLambertMaterial({color:0xd4a840,transparent:true,opacity:0.7}), x, 1.08, -4.0);
+}
+for(let z=-4.35; z<=-3.65; z+=0.15){
+  box(6.6, 0.02, 0.02, new THREE.MeshLambertMaterial({color:0xd4a840,transparent:true,opacity:0.7}), 0, 1.08+Math.sin((z+4.0)*8)*0.08, z);
+}
+
+// Cadeiras varanda
+function cadeira(x,z,ry){
+  const g=new THREE.Group();
+  box(0.55,0.06,0.5,M.wood,0,0.42,0,g);
+  box(0.55,0.48,0.05,M.wood,0,0.65,-0.225,g);
+  [-0.23,0.23].forEach(px=>[-0.2,0.2].forEach(pz=>{
+    box(0.04,0.4,0.04,M.dark,px,0.2,pz,g);
+  }));
+  g.position.set(x,fh,z); g.rotation.y=ry; scene.add(g);
+}
+cadeira(-1.5,-4.2, 0.3); cadeira(1.5,-4.2,-0.3);
+
+// ═══════════════════════════════════════
+// SUÍTE (NE: x=1.8..5, z=-3..0.2)
+// ═══════════════════════════════════════
+// Cama de casal 1.60×2.0 — orientada que uma pessoa deitada caiba folgada
+box(1.65, 0.4, 2.0, new THREE.MeshLambertMaterial({color:0xe8f0f5}), 3.5, 0.4/2+fh, -1.8);
+// Cabeceira
+box(1.65, 0.55, 0.08, new THREE.MeshLambertMaterial({color:0xc8b898}), 3.5, 0.55/2+fh, -3.0+0.08);
+// Travesseiros
+box(0.6,0.12,0.4, M.white, 3.1, 0.6, -2.85); box(0.6,0.12,0.4, M.white, 3.9, 0.6, -2.85);
+// Criado-mudo
+box(0.4,0.5,0.35, new THREE.MeshLambertMaterial({color:0xb8a888}), 2.0, 0.5/2+fh, -2.5);
+box(0.4,0.5,0.35, new THREE.MeshLambertMaterial({color:0xb8a888}), 4.8-0.2, 0.5/2+fh, -2.5);
+// Guarda-roupa embutido Leste (parede)
+box(0.4,2.2,2.4, new THREE.MeshLambertMaterial({color:0xd0c8b8}), hw-0.2, 1.1, -1.5);
+// Janela suíte Norte — alto para ventilação, não pega sol tarde (Norte)
+box(0.06,0.9,1.8, M.glass, hw-0.03, 1.7, -1.5, wallsGroup);
+// Banheiro suíte (canto NE)
+box(0.9,2.2,1.2, new THREE.MeshLambertMaterial({color:0xb0c8d0,transparent:true,opacity:0.5}), 4.3, 1.1, -2.4);
+box(0.35,0.06,0.35, M.white, 4.0, 0.82, -1.5); // pia
+cyl(0.2,0.2,0.06,16, new THREE.MeshLambertMaterial({color:0xd0e0e8}), 4.6, 0.7, -2.5); // vaso
+
+// ═══════════════════════════════════════
+// QUARTO 2 (NO: x=-5..-1.8, z=-3..0.2)
+// ═══════════════════════════════════════
+// Cama de solteiro 0.90×2.0
+box(1.0, 0.38, 2.0, new THREE.MeshLambertMaterial({color:0xf0e8f4}), -3.5, 0.38/2+fh, -1.8);
+box(1.0, 0.45, 0.08, new THREE.MeshLambertMaterial({color:0xd0b8c0}), -3.5, 0.45/2+fh, -3.0+0.08);
+box(0.75,0.1,0.35, M.white, -3.5, 0.55, -2.85);
+// Escrivaninha
+box(1.0,0.04,0.5, new THREE.MeshLambertMaterial({color:0x8a6840}), -4.5, 0.78, -0.5);
+[-4.0,-4.0,-5.0,-5.0].forEach((x,i)=>{
+  box(0.04,0.75,0.04,M.trunk, x, 0.375, i<2?-0.28:-0.72);
+});
+box(0.04,0.75,0.04,M.trunk, -4.0, 0.375, -0.28);
+box(0.04,0.75,0.04,M.trunk, -5.0, 0.375, -0.28);
+box(0.04,0.75,0.04,M.trunk, -4.0, 0.375, -0.72);
+box(0.04,0.75,0.04,M.trunk, -5.0, 0.375, -0.72);
+// Janela qto2 Norte
+box(0.06,0.9,1.8, M.glass, -hw+0.03, 1.7, -1.5, wallsGroup);
+// Banheiro qto2 (canto NO)
+box(0.9,2.2,1.2, new THREE.MeshLambertMaterial({color:0xb0c8d0,transparent:true,opacity:0.5}), -4.3, 1.1, -2.4);
+box(0.35,0.06,0.35, M.white, -4.0, 0.82, -1.5);
+cyl(0.2,0.2,0.06,16, new THREE.MeshLambertMaterial({color:0xd0e0e8}), -4.6, 0.7, -2.5);
+
+// ═══════════════════════════════════════
+// SALA / ESTAR (SO: x=-5..-1.8, z=3.8..7)
+// ═══════════════════════════════════════
+// Sofá L
+box(2.8,0.45,0.8, new THREE.MeshLambertMaterial({color:0x8a7060}), -3.0, 0.45/2+fh, 5.0);
+box(0.8,0.45,1.6, new THREE.MeshLambertMaterial({color:0x8a7060}), -4.6, 0.45/2+fh, 4.4);
+// Encostos
+box(2.8,0.5,0.12, new THREE.MeshLambertMaterial({color:0x7a6050}), -3.0, 0.7, 5.38);
+box(0.12,0.5,1.6, new THREE.MeshLambertMaterial({color:0x7a6050}), -4.98, 0.7, 4.4);
+// Mesa centro sala
+box(1.0,0.04,0.6, new THREE.MeshLambertMaterial({color:0x6a4820}), -3.0, 0.42, 5.8);
+[-3.5,-2.5].forEach(x=>[-3.5+0.25,5.8+0.25-0.25,...[]].forEach(z=>{
+  // pernas apenas sob os cantos
+}));
+box(0.04,0.4,0.04,M.trunk,-3.45,0.2,5.55); box(0.04,0.4,0.04,M.trunk,-2.55,0.2,5.55);
+box(0.04,0.4,0.04,M.trunk,-3.45,0.2,6.05); box(0.04,0.4,0.04,M.trunk,-2.55,0.2,6.05);
+// TV (parede Oeste)
+box(0.06, 0.7, 1.2, new THREE.MeshLambertMaterial({color:0x1a1a18}), -hw+0.04, 1.5, 4.5, wallsGroup);
+// Janela sala Oeste (sol da tarde — agradável para estar)
+box(0.06,1.0,2.0, M.glass, -hw+0.03, 1.5, 5.2, wallsGroup);
+
+// ═══════════════════════════════════════
+// COZINHA + ÁREA SERVIÇO (SE: x=1.8..5, z=3.8..7)
+// ═══════════════════════════════════════
+// Bancada em L
+box(3.0,0.9,0.55, M.concrete, 3.0+0.2, 0.45+fh, 4.1); // bancada x (paralela parede Norte)
+box(0.55,0.9,3.2, M.concrete, hw-0.275, 0.45+fh, 5.4); // bancada Z (parede Leste)
+// Armários
+box(3.0,0.6,0.38, new THREE.MeshLambertMaterial({color:0xe0d8c8}), 3.4, 2.4, 4.1);
+box(0.38,0.6,2.8, new THREE.MeshLambertMaterial({color:0xe0d8c8}), hw-0.19, 2.4, 5.4);
+// Fogão
+box(0.65,0.06,0.55, new THREE.MeshLambertMaterial({color:0x4a4840}), 2.1, 0.95, 4.0);
+for(let bx=1.85;bx<=2.35;bx+=0.2) for(let bz=3.78;bz<=4.22;bz+=0.2)
+  cyl(0.06,0.06,0.04,8,new THREE.MeshLambertMaterial({color:0x888090}),bx,0.98,bz);
+// Geladeira
+box(0.7,1.9,0.65, new THREE.MeshLambertMaterial({color:0xe8e8e0}), hw-0.35, 0.95, 4.1);
+// Pia
+cyl(0.25,0.25,0.06,16, new THREE.MeshLambertMaterial({color:0x9090a0}), 3.4, 0.92, 5.2);
+// Mesa de jantar
+box(1.4,0.04,0.9, new THREE.MeshLambertMaterial({color:0x8a6040}), 3.0, 0.78, 6.4);
+[2.4,3.6].forEach(x=>[6.0,6.8].forEach(z=>{
+  box(0.04,0.75,0.04,M.trunk,x,0.375,z);
+}));
+// 4 cadeiras
+[[2.4,6.4,-0.2],[3.6,6.4,0.2],[3.0,5.9,0.3],[3.0,6.9,-0.3]].forEach(([x,z,ry])=>cadeira(x,z,ry));
+
+// ═══════════════════════════════════════
+// JARDIM DE INVERNO — PLANTAS E DETALHES
+// ═══════════════════════════════════════
+function plant(x,z,h,r,shade){
+  cyl(0.07,0.1,h*0.45,7,M.trunk,x,h*0.225,z);
+  sph(r, shade||M.green, x, h*0.45+r*0.6, z);
+  sph(r*0.65, M.darkgreen, x+r*0.35, h*0.45+r*1.1, z+r*0.2);
+}
+// Plantas centrais (ricas — jardim é o coração)
+plant(0.5, jz-0.8, 1.8, 0.5);
+plant(-0.6, jz+0.5, 2.2, 0.62);
+plant(0.8, jz+1.0, 1.4, 0.42);
+plant(-0.5, jz-1.0, 1.6, 0.48);
+plant(1.2, jz-0.2, 1.1, 0.35);
+plant(-1.1, jz+0.3, 1.3, 0.4);
+
+// Banco de pedra central (jardim como sala de descanso)
+// Uma pessoa deitada cabe (1.9m de comprimento)
+box(1.9, 0.45, 0.55, M.stone, 0, 0.45/2+fh*1.2+0.02, jz+0.7);
+box(1.9, 0.06, 0.55, new THREE.MeshLambertMaterial({color:0x8a9880}), 0, 0.47+fh*1.2, jz+0.7);
+// Travesseiro banco (sugestão de descanso)
+box(0.5,0.12,0.45, new THREE.MeshLambertMaterial({color:0xf0e8d8}), -0.6, 0.55, jz+0.7);
+
+// Vasos decorativos
+[[1.5,jz-1.6],[1.5,jz+1.6],[-1.5,jz-1.6],[-1.5,jz+1.6]].forEach(([x,z])=>{
+  cyl(0.22,0.16,0.35,10,M.stone,x,0.35/2+fh*1.2,z);
+  sph(0.28,M.darkgreen,x,0.35+0.22,z);
+});
+
+// Pedra pisante (decorativa)
+[[-0.5,jz-1.4],[0.4,jz-0.5],[-0.3,jz+0.8],[0.5,jz+1.5]].forEach(([x,z])=>{
+  box(0.4+Math.random()*0.2, 0.04, 0.35+Math.random()*0.15,
+    new THREE.MeshLambertMaterial({color:0x9a8e7a}), x, fh*1.25+0.02, z);
+});
+
+// ═══════════════════════════════════════
+// PISCINA — CANTO SW (Oeste/Sul) — mais quente da tarde
+// Lote: z=7..15 (fundos), x=-5..+5
+// Piscina: x=-5..0, z=9..14 (pequena mas generosa)
+// ═══════════════════════════════════════
+const px0=-4.8, px1=-0.4, pz0=9.5, pz1=14.5;
+const pcx=(px0+px1)/2, pcz=(pz0+pz1)/2;
+const psizeX=Math.abs(px1-px0), psizeZ=Math.abs(pz1-pz0);
+
+// Deck madeira em volta (toda área SW de fundos)
+box(psizeX+1.0, 0.12, psizeZ+2.0, M.wood, pcx-0.2, 0.06, pcz+0.4);
+
+// Borda piscina (laje)
+box(psizeX+0.4, 0.22, psizeZ+0.4, M.poolWall, pcx, 0.11, pcz);
+
+// Água
+box(psizeX-0.2, 0.35, psizeZ-0.2, M.water, pcx, 0.25, pcz);
+// Plano reflexo
+{
+  const geo=new THREE.PlaneGeometry(psizeX-0.2, psizeZ-0.2);
+  const m=new THREE.Mesh(geo, new THREE.MeshPhysicalMaterial({color:0x6ab0d8,transparent:true,opacity:0.35,roughness:0}));
+  m.rotation.x=-Math.PI/2; m.position.set(pcx, 0.45, pcz); scene.add(m);
+}
+
+// Escadas piscina
+box(0.5,0.3,0.22, M.poolWall, px1-0.25, 0.15, pz0+0.3);
+box(0.5,0.18,0.22, M.poolWall, px1-0.25, 0.09, pz0+0.55);
+
+// Espreguiçadeiras (sol da tarde bate aqui — intencional)
+function espreguicadeira(x,z,ry){
+  const g=new THREE.Group();
+  box(0.62,0.08,1.9,M.yellow,0,0.04,0,g);
+  box(0.62,0.55,0.08,M.yellow,0,0.3,-0.91,g);
+  g.rotation.x=0.18;
+  [-0.26,0.26].forEach(px=>[-0.8,0.75].forEach(pz=>{
+    box(0.04,0.36,0.04,M.dark,px,-0.18,pz,g);
+  }));
+  g.position.set(x,0.4,z); g.rotation.y=ry; scene.add(g);
+}
+espreguicadeira(-3.8,8.8,0); espreguicadeira(-2.0,8.8,0);
+
+// Guarda-sol piscina
+cyl(0.025,0.025,2.5,6,M.dark, -2.9, 1.25, 9.0);
+{
+  const geo=new THREE.CylinderGeometry(1.3,1.5,0.1,12);
+  const m=new THREE.Mesh(geo, new THREE.MeshLambertMaterial({color:0xe04020,transparent:true,opacity:0.88}));
+  m.position.set(-2.9,2.55,9.0); scene.add(m);
+}
+
+// Ducha ao ar livre (próxima piscina)
+cyl(0.04,0.04,2.2,8,M.metal, px1+0.4, 1.1, pz0-0.5);
+box(0.3,0.04,0.2, M.metal, px1+0.4, 2.18, pz0-0.5);
+
+// ═══════════════════════════════════════
+// ÁREA EXTERNA LESTE (jardim/quintal)
+// z=7..15, x=0..5
+// ═══════════════════════════════════════
+// Grama, árvores, churrasqueira
+box(5.0, 0.08, 8.0, new THREE.MeshLambertMaterial({color:0x6a9a50}), 2.5, 0.04, 11.0);
+// Churrasqueira
+box(0.8,1.0,0.6, M.stone, 3.5, 0.5, 9.5);
+box(0.6,0.06,0.5, new THREE.MeshLambertMaterial({color:0x4a4840}), 3.5, 1.04, 9.5);
+cyl(0.1,0.14,1.2,8,M.dark, 3.5, 1.6, 9.5);
+
+// Árvores quintal
+function tree(x,z,h,r){
+  cyl(0.1,0.15,h*0.55,7,M.trunk,x,h*0.275,z);
+  sph(r, M.green, x, h*0.55+r*0.7, z);
+  sph(r*0.65, M.darkgreen, x+r*0.4, h*0.55+r*1.1, z-r*0.2);
+}
+tree(4.2, 10.5, 4.0, 1.1); tree(1.5, 12.5, 3.5, 0.9); tree(4.5, 14.0, 5.0, 1.3);
+
+// Jardim frente (Norte, recuo)
+tree(-3.8, -5.5, 3.5, 0.9); tree(3.8, -5.5, 3.0, 0.8);
+tree(-1.5, -6.5, 2.5, 0.7); tree(1.5, -6.5, 2.5, 0.7);
+
+// ═══════════════════════════════════════
+// ILUMINAÇÃO
+// ═══════════════════════════════════════
+const ambient = new THREE.AmbientLight(0xfff8f0, 0.45);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xfff4e0, 1.7);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.camera.near=0.5; sun.shadow.camera.far=100;
+sun.shadow.camera.left=-25; sun.shadow.camera.right=25;
+sun.shadow.camera.top=25; sun.shadow.camera.bottom=-25;
+scene.add(sun);
+
+// Luz jardim de inverno (ponto de luz suave vindo de cima)
+const jardimLight = new THREE.PointLight(0xf0ffe0, 0.6, 8);
+jardimLight.position.set(jx, wh+0.5, jz); scene.add(jardimLight);
+
+// Luz interna por cômodo
+[
+  [3.0, 2.2, -1.5],  // suíte
+  [-3.0, 2.2, -1.5], // qto2
+  [-3.0, 2.2,  5.4], // sala
+  [3.0, 2.2,  5.4],  // cozinha
+].forEach(([x,y,z])=>{
+  const l=new THREE.PointLight(0xfff8e0,0.35,6);
+  l.position.set(x,y,z); scene.add(l);
+});
+
+function setTime(t){
+  const configs={
+    // Sol nasce Leste (+X), manhã vindo de +X frente
+    morning:  {pos:[35,18,-20], color:0xffe8b0, int:1.5, sky:0x87CEEB, fog:0x87CEEB},
+    noon:     {pos:[0,40,0],    color:0xffffff,  int:1.9, sky:0x5599dd, fog:0x6aadee},
+    // Sol da tarde: Oeste (-X) + um pouco Sul (+Z) — bate na piscina SW, poupa quartos Norte
+    afternoon:{pos:[-35,14,25], color:0xffaa50,  int:1.3, sky:0xe07040, fog:0xd08050},
+  };
+  const cfg=configs[t];
+  sun.position.set(...cfg.pos); sun.color.setHex(cfg.color); sun.intensity=cfg.int;
+  scene.background=new THREE.Color(cfg.sky);
+  scene.fog.color.setHex(cfg.fog);
+}
+setTime('morning');
+
+// ─────────────────────────────────────────
+// CÂMERA ORBITAL
+// ─────────────────────────────────────────
+let mode='ext';
+let extTheta=0.55, extPhi=0.85, extRadius=30;
+const extTarget=new THREE.Vector3(0,1.5,2.0);
+
+camera.position.set(
+  extTarget.x+extRadius*Math.sin(extTheta)*Math.cos(extPhi),
+  extTarget.y+extRadius*Math.sin(extPhi),
+  extTarget.z+extRadius*Math.cos(extTheta)*Math.cos(extPhi)
+);
+camera.lookAt(extTarget);
+
+let dragging=false, lastX=0, lastY=0;
+canvas.addEventListener('mousedown',e=>{if(mode==='ext'){dragging=true;lastX=e.clientX;lastY=e.clientY;}});
+window.addEventListener('mouseup',()=>dragging=false);
+window.addEventListener('mousemove',e=>{
+  if(!dragging||mode!=='ext')return;
+  extTheta-=(e.clientX-lastX)*0.008;
+  extPhi=Math.max(0.08,Math.min(1.45,extPhi-(e.clientY-lastY)*0.006));
+  lastX=e.clientX; lastY=e.clientY;
+});
+canvas.addEventListener('wheel',e=>{
+  if(mode==='ext') extRadius=Math.max(6,Math.min(70,extRadius+e.deltaY*0.04));
+},{passive:true});
+
+let pinchDist=0;
+canvas.addEventListener('touchstart',e=>{
+  if(e.touches.length===1){dragging=true;lastX=e.touches[0].clientX;lastY=e.touches[0].clientY;}
+  if(e.touches.length===2){
+    const dx=e.touches[0].clientX-e.touches[1].clientX, dy=e.touches[0].clientY-e.touches[1].clientY;
+    pinchDist=Math.sqrt(dx*dx+dy*dy);
+  }
+},{passive:true});
+canvas.addEventListener('touchmove',e=>{
+  if(e.touches.length===1&&dragging&&mode==='ext'){
+    extTheta-=(e.touches[0].clientX-lastX)*0.008;
+    extPhi=Math.max(0.08,Math.min(1.45,extPhi-(e.touches[0].clientY-lastY)*0.006));
+    lastX=e.touches[0].clientX; lastY=e.touches[0].clientY;
+  }
+  if(e.touches.length===2){
+    const dx=e.touches[0].clientX-e.touches[1].clientX, dy=e.touches[0].clientY-e.touches[1].clientY;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    extRadius=Math.max(6,Math.min(70,extRadius-(d-pinchDist)*0.05));
+    pinchDist=d;
+  }
+},{passive:true});
+canvas.addEventListener('touchend',()=>dragging=false,{passive:true});
+
+// ─────────────────────────────────────────
+// CÂMERA FPS
+// ─────────────────────────────────────────
+const intPos=new THREE.Vector3(0,1.65,-2.0);
+let intYaw=0, intPitch=0;
+const keys={};
+window.addEventListener('keydown',e=>keys[e.code]=true);
+window.addEventListener('keyup',e=>keys[e.code]=false);
+
+let pointerLocked=false;
+canvas.addEventListener('click',()=>{ if(mode==='int') canvas.requestPointerLock(); });
+document.addEventListener('pointerlockchange',()=>{ pointerLocked=document.pointerLockElement===canvas; });
+document.addEventListener('mousemove',e=>{
+  if(!pointerLocked||mode!=='int')return;
+  intYaw  -=e.movementX*0.002;
+  intPitch=Math.max(-1.0,Math.min(1.0,intPitch-e.movementY*0.002));
+});
+
+// Zonas de label (baseado em posição X/Z)
+function getRoomLabel(x,z){
+  // Jardim de inverno (centro)
+  if(x>=-1.9&&x<=1.9&&z>=0.1&&z<=3.9) return '🌿 Jardim de Inverno';
+  // Varanda
+  if(z<=-3.0&&z>=-5.2) return '🏡 Varanda';
+  // Suíte
+  if(x>=1.8&&z<0.2&&z>=-3.0) return '🛏 Suíte Master';
+  // Qto2
+  if(x<=-1.8&&z<0.2&&z>=-3.0) return '🛏 Quarto 2';
+  // Sala
+  if(x<=-1.8&&z>=3.8&&z<=7.2) return '🛋 Sala de Estar';
+  // Cozinha
+  if(x>=1.8&&z>=3.8&&z<=7.2) return '🍳 Cozinha + Jantar';
+  // Piscina/deck
+  if(z>=8.0&&x<=-0.2) return '🏊 Piscina + Deck';
+  // Quintal
+  if(z>=8.0&&x>=0) return '🌳 Quintal + Churrasco';
+  return '';
+}
+
+const roomLabel=document.getElementById('room-label');
+let lastZone='';
+function updateRoomLabel(x,z){
+  const lbl=getRoomLabel(x,z);
+  if(lbl!==lastZone){
+    roomLabel.textContent=lbl;
+    roomLabel.classList.toggle('show',!!lbl);
+    lastZone=lbl;
+  }
+}
+
+// ─────────────────────────────────────────
+// TOGGLE
+// ─────────────────────────────────────────
+let wallsVisible=true, roofVisible=true;
+function toggleWalls(){ wallsVisible=!wallsVisible; wallsGroup.visible=wallsVisible; }
+function toggleRoof(){ roofVisible=!roofVisible; roofGroup.visible=roofVisible; }
+
+function setMode(m){
+  mode=m;
+  document.getElementById('btn-ext').classList.toggle('active',m==='ext');
+  document.getElementById('btn-int').classList.toggle('active',m==='int');
+  const hint=document.getElementById('hint');
+  if(m==='int'){
+    intPos.set(0,1.65,-2.0); intYaw=Math.PI; intPitch=0;
+    hint.textContent='WASD = mover  ·  Clique + mover mouse = olhar  ·  Q/E = subir/descer';
+    roomLabel.classList.remove('show');
+  } else {
+    if(pointerLocked) document.exitPointerLock();
+    hint.textContent='Arrastar = girar  ·  Scroll/Pinch = zoom';
+  }
+}
+
+// ─────────────────────────────────────────
+// LOOP
+// ─────────────────────────────────────────
+const clock=new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=Math.min(clock.getDelta(),0.05);
+
+  if(mode==='ext'){
+    camera.position.set(
+      extTarget.x+extRadius*Math.sin(extTheta)*Math.cos(extPhi),
+      extTarget.y+extRadius*Math.sin(extPhi),
+      extTarget.z+extRadius*Math.cos(extTheta)*Math.cos(extPhi)
+    );
+    camera.lookAt(extTarget);
+  } else {
+    const speed=4.5;
+    const fwd=new THREE.Vector3(-Math.sin(intYaw),0,-Math.cos(intYaw));
+    const right=new THREE.Vector3(Math.cos(intYaw),0,-Math.sin(intYaw));
+    if(keys['KeyW']||keys['ArrowUp'])    intPos.addScaledVector(fwd,speed*dt);
+    if(keys['KeyS']||keys['ArrowDown'])  intPos.addScaledVector(fwd,-speed*dt);
+    if(keys['KeyA']||keys['ArrowLeft'])  intPos.addScaledVector(right,-speed*dt);
+    if(keys['KeyD']||keys['ArrowRight']) intPos.addScaledVector(right,speed*dt);
+    if(keys['KeyQ']) intPos.y+=speed*0.4*dt;
+    if(keys['KeyE']) intPos.y=Math.max(0.5,intPos.y-speed*0.4*dt);
+    intPos.x=Math.max(-4.8,Math.min(4.8,intPos.x));
+    intPos.z=Math.max(-5.0,Math.min(15.0,intPos.z));
+    intPos.y=Math.max(0.5,Math.min(4.0,intPos.y));
+
+    camera.position.copy(intPos);
+    const lookDir=new THREE.Vector3(
+      -Math.sin(intYaw)*Math.cos(intPitch),
+      Math.sin(intPitch),
+      -Math.cos(intYaw)*Math.cos(intPitch)
+    );
+    camera.lookAt(intPos.clone().add(lookDir));
+    updateRoomLabel(intPos.x, intPos.z);
+  }
+
+  // Animar água
+  if(M.water.map) M.water.map.offset.x+=dt*0.018;
+  // Luz jardim pulsa suavemente (luz natural filtrada)
+  jardimLight.intensity = 0.6 + Math.sin(Date.now()*0.001)*0.08;
+
+  renderer.render(scene,camera);
+}
+
+window.addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
